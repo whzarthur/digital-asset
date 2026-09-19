@@ -1,0 +1,4 @@
+interface:
+  display_name: "数字资产"
+  short_description: "生成标准人物、多机位无人场景与中性背景物品资产图"
+  default_prompt: "使用 $digital-asset-export 根据我的剧本或分镜生成规范命名的人物、无人场景和物品资产；需要标准多机位场景时按五张独立空景图交付。"
