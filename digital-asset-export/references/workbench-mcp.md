@@ -4,7 +4,8 @@
 
 ## 兼容原则
 
-- 当前验证基线是 `film-workbench-stage/1.0.0`，但每次调用都以 `get_stage_contract({"stage":"assets"})` 的实时返回为准；不得复制旧 schema 后长期使用。
+- 当前验证基线是 `film-workbench-stage/1.2.0`，但每次调用都以 `get_stage_contract({"stage":"assets"})` 的实时返回为准；不得复制旧 schema 后长期使用。
+- 若实时 assets 契约仍是 `1.0.0`，或输出 payload schema 未要求 `known_asset_counts`，说明 MCP 进程仍缓存旧代码；停止本次工作台写入，重连或重启该 MCP 后重新读取契约，不按旧字段继续同步。
 - MCP 是项目数据通道，不是流程控制器。Skill 负责理解素材和生成图片；MCP 负责提供真实上下文、校验完整候选快照并追加不可变 revision。
 - `assets` 是项目级环节：顶层 `episode_id` 使用实时契约要求的值；当前契约为 `null`。剧集和镜头范围通过 `selectors` 读取，通过精确 `usage_bindings` 写回。
 - `assets v1` 只接受真实 `image/*` 文件。图片说明、文件路径字符串、base64 占位、视频、网页或清单都不能代替图片文件。
@@ -47,6 +48,10 @@
 
 ## 映射为工作台资产
 
+- 每次写入前，根据项目当前全部已知分镜计算 `payload.known_asset_counts`：逐镜识别会独立管理的人物身份、物理场景和物品，跨镜头去重；同一身份的造型状态、不同视角、图片版本和重复引用都不增加资产身份数量。尚未生成但已能从分镜确认的资产也计入。`total` 等于 `character + scene + prop`，各类至少覆盖最新输入里的已登记资产。
+- `known_asset_counts` 是项目级数量。若当前 `selectors.shot_ids` 只读了部分镜头，应另读该剧集完整分镜；多剧集项目逐集读取当前分镜并跨集去重，再提交项目级数量。不要用当前选中镜头数、需求条数、已生成图片数或 `existing_assets.length` 冒充总数。分镜后续新增、删减或合并身份时，下一次同步重新计算。旧输入的 `input.known_asset_counts` 只作对照，不照抄。
+- `requirements` 记录镜头需要什么，`usage_bindings` 记录该镜头实际固定使用哪张图片；资产已生成不等于自动关联。实时契约允许 `payload.requirements` 时，依据已确认的全部分镜登记可证实的人物、场景、物品需求，包括尚未生成图片的需求；每条带准确的 `episode_id`、`shot_id`、分镜版本、类别、用途、必要性和可确定的状态。目标资产身份已确定时填写稳定 `target_asset_id`，否则按契约填空值；缺乏依据时不编造身份、状态或必要性。
+- 延用输入中已有的需求 ID，同一镜头的同一资产身份与状态不要重复创建需求；保留本次未修改的既有需求。若已有固定引用却缺需求，可依据分镜与绑定补齐对应需求，但不得把固定引用反推成分镜中未出现的其他需求。新增 `usage_bindings` 尽可能填写对应 `requirement_id`，并且只在镜头确实采用精确图片版本时登记；未生成或未选定版本的需求保持未绑定。
 - 延用 `read_stage_input` 返回的稳定 asset ID；只有新增资产时才创建不冲突的新 ID。重做图片使用递增版本，不覆盖已确认 revision。
 - 人物每个造型仍固定为两张真实图片，并归入同一个 character asset、同一个状态和同一个版本组：写实为四视图板加脸部双特写板，非写实为三视图板加单人物特写。`view`、`role` 和 `formal_group` 的具体值按实时契约填写，不为省事拆成两个角色。
 - 场景和物品按主 `SKILL.md` 的独立图片规则写入对应 scene/prop asset；多张视角图属于同一资产的 variants，不为每个视角新建资产 ID。
@@ -67,11 +72,11 @@
 只有用户对当前逐项确认问题作出肯定答复时才执行；一次确认不得合并多个资产单元：
 
 1. 图片生成并获得用户确认后，重新调用 `get_stage_contract` 和 `read_stage_input`。若契约版本、`context_hash`、依赖 revision 或现有资产发生变化，用新上下文重建候选，不能提交旧上下文生成的增量。
-2. 组装完整候选快照，而不是只提交本次新增图片。除非用户明确要求替换，必须保留最新输入中的既有资产、版本和 usage bindings，只加入当前已确认资产单元的新版本或新资产；不得顺带写入其他未确认单元，避免完整快照写入时误删旧数据或越权提交。`producer.skill_id` 使用 `digital-asset-export`，`skill_version` 只填写真实版本或契约允许的空值。
+2. 组装完整候选快照，而不是只提交本次新增图片。依据最新完整分镜重新计算并填写 `known_asset_counts`；若实时契约允许，同时填写上述镜头需求，保留已有需求并补齐可证实的缺项。除非用户明确要求替换，必须保留最新输入中的既有资产、版本和 usage bindings，只加入当前已确认资产单元的新版本或新资产；需求登记不等于生成或确认其他资产，不得顺带写入其他未确认单元的图片。`producer.skill_id` 使用 `digital-asset-export`，`skill_version` 只填写真实版本或契约允许的空值。
 3. 只有实时契约声明 `upload_supported` 时调用 `begin_stage_upload`。只在返回的一次性目录中写 `artifact.json` 与 `files/`；不得写任意项目路径。这里的 JSON 是 MCP 内部传输元数据，不作为用户交付物，最终仍只向用户交付图片。
 4. 依据实时契约记录真实图片 MIME、字节数、SHA-256、宽高、资产状态、视角、版本及确切 usage bindings，并只引用本次实际采用的 dependency refs。`files[].ref`、variant 的 `file_ref` 与 binding 的 `file_ref` 必须指向同一真实图片。
 5. 调用 `validate_stage_output`，优先传 `upload_session_id`；失败时修正候选，不写正式项目。成功后才把同一长生命周期 MCP 进程签发的一次性 `validation_token` 交给 `write_stage_output`。
-6. 写入后调用 `get_artifact` 回读服务端最终 `artifact_id`、revision、canonical path、hash、数据状态和警告。只有回读一致后才能报告当前资产单元同步成功；只完成上传或校验不能称为已经同步。成功后刷新 `read_stage_input`，再进入下一个资产单元。
+6. 写入后调用 `get_artifact` 回读服务端最终 `artifact_id`、revision、canonical path、hash、数据状态和警告。只有回读一致后才能报告当前资产单元同步成功；只完成上传或校验不能称为已经同步。成功后刷新 `read_stage_input`，核对已提交需求及精确绑定均可读、原有需求仍在，再进入下一个资产单元。
 
 收到 `STALE_CONTRACT`、上下文过期、依赖 revision 改变或 validation token 失效时，重新发现契约、读取输入并重建候选。幂等重试使用同一次逻辑提交的 idempotency key；内容发生变化时创建新的提交身份。不得直接写 `projects/<ID>/files/`，不得把未确认图片、视频、HTML、清单或其他文档写入 assets v1。
 
