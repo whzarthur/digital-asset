@@ -4,7 +4,7 @@
 
 ## 兼容原则
 
-- 当前验证基线是 `film-workbench-stage/1.2.0`，但每次调用都以 `get_stage_contract({"stage":"assets"})` 的实时返回为准；不得复制旧 schema 后长期使用。
+- 每次调用都以 `get_stage_contract({"stage":"assets"})` 的实时返回为准；支持旧图复用的契约会在 `file_capabilities.reuse_registered_files` 中明确声明，不得凭本地代码版本猜测当前 MCP 已启用。
 - 若实时 assets 契约仍是 `1.0.0`，或输出 payload schema 未要求 `known_asset_counts`，说明 MCP 进程仍缓存旧代码；停止本次工作台写入，重连或重启该 MCP 后重新读取契约，不按旧字段继续同步。
 - MCP 是项目数据通道，不是流程控制器。Skill 负责理解素材和生成图片；MCP 负责提供真实上下文、校验完整候选快照并追加不可变 revision。
 - `assets` 是项目级环节：顶层 `episode_id` 使用实时契约要求的值；当前契约为 `null`。剧集和镜头范围通过 `selectors` 读取，通过精确 `usage_bindings` 写回。
@@ -79,9 +79,10 @@
 1. 图片生成并获得用户确认后，重新调用 `get_stage_contract` 和 `read_stage_input`。若契约版本、`context_hash`、依赖 revision 或现有资产发生变化，用新上下文重建候选，不能提交旧上下文生成的增量。
 2. 组装完整候选快照，而不是只提交本次新增图片。依据最新完整分镜重新计算并填写 `known_asset_counts`；若实时契约允许，同时填写上述镜头需求，保留已有需求并补齐可证实的缺项。除非用户明确要求替换，必须保留最新输入中的既有资产、版本和 usage bindings，只加入当前已确认正式资产单元的新版本或新资产；不得包含概念图。需求登记不等于生成或确认其他资产，不得顺带写入其他未确认单元的图片。`producer.skill_id` 使用 `digital-asset-export`，`skill_version` 只填写真实版本或契约允许的空值。
 3. 只有实时契约声明 `upload_supported` 时调用 `begin_stage_upload`。只在返回的一次性目录中写 `artifact.json` 与 `files/`；不得写任意项目路径。这里的 JSON 是 MCP 内部传输元数据，不作为用户交付物，最终仍只向用户交付图片。
-4. 依据实时契约记录真实图片 MIME、字节数、SHA-256、宽高、资产状态、视角、版本及确切 usage bindings，并只引用本次实际采用的 dependency refs。`files[].ref`、variant 的 `file_ref` 与 binding 的 `file_ref` 必须指向同一真实图片。
-5. 调用 `validate_stage_output`，优先传 `upload_session_id`；失败时修正候选，不写正式项目。成功后才把同一长生命周期 MCP 进程签发的一次性 `validation_token` 交给 `write_stage_output`。
-6. 写入后调用 `get_artifact` 回读服务端最终 `artifact_id`、revision、canonical path、hash、数据状态和警告。只有回读一致后才能报告当前资产单元同步成功；只完成上传或校验不能称为已经同步。成功后刷新 `read_stage_input`，核对已提交需求及精确绑定均可读、原有需求仍在，再进入下一个资产单元。
+4. 依据实时契约记录真实图片 MIME、字节数、SHA-256、宽高、资产状态、视角、版本及确切 usage bindings，并只引用本次实际采用的 dependency refs。`files[].ref`、variant 的 `file_ref` 与 binding 的 `file_ref` 必须指向同一真实图片。若实时契约声明 `reuse_registered_files`，从既有 `get_artifact` 回读取得旧图的完整文件元数据，在完整 `files[]` 中保留项目内规范路径并添加 `reuse_file_id`，仅复制新图到本次会话。若未声明，继续按实时契约上传所需图片，不向旧版 MCP 发送新字段。
+5. 本地提供 `tools/pack_assets_upload.py` 时，可先把完整候选写为临时 plan：需上传的图片记录带本地绝对 `source_path`；只有实时契约支持复用时，旧图记录才改用 `reuse_file_id`。脚本核对会话、复制需上传的图片并填入 MIME、字节数、SHA-256、宽高，然后原子写入 `artifact.json`。这个临时 plan 不提交工作台，也不作为用户交付物；避免在终端逐段传送大型 JSON。上传后仍由 MCP 校验全部文件。
+6. 调用 `validate_stage_output`，优先传 `upload_session_id`；失败时修正候选，不写正式项目。成功后才把同一长生命周期 MCP 进程签发的一次性 `validation_token` 交给 `write_stage_output`。
+7. 写入后调用 `get_artifact` 回读服务端最终 `artifact_id`、revision、canonical path、hash、数据状态和警告。只有回读一致后才能报告当前资产单元同步成功；只完成上传或校验不能称为已经同步。成功后刷新 `read_stage_input`，核对已提交需求及精确绑定均可读、原有需求仍在，再进入下一个资产单元。
 
 收到 `STALE_CONTRACT`、上下文过期、依赖 revision 改变或 validation token 失效时，重新发现契约、读取输入并重建候选。幂等重试使用同一次逻辑提交的 idempotency key；内容发生变化时创建新的提交身份。不得直接写 `projects/<ID>/files/`，不得把未确认图片、视频、HTML、清单或其他文档写入 assets v1。
 
