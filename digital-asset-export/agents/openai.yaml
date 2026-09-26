@@ -1,9 +1,9 @@
 interface:
   display_name: "数字资产"
-  short_description: "拆解资产身份与状态，再逐项确认、制作和同步图片"
-  default_prompt: "使用 $digital-asset-export 根据工作台剧本与分镜同步待确认资产占位；我确认结构后，再逐项制作并确认正式图片。"
+  short_description: "读取分镜资产 ID 与状态，逐项确认、制作和同步图片"
+  default_prompt: "使用 $digital-asset-export 读取工作台已确认分镜中的资产 ID 和状态，再逐项制作并确认正式图片。"
 dependencies:
   tools:
     - type: "mcp"
       value: "film-workbench"
-      description: "读取灵创工作台项目、分镜与动态 assets 契约，按请求同步无图片规划草稿，并逐项校验和写回已确认图片"
+      description: "读取灵创工作台已确认分镜与动态 assets 契约，按需登记无图片占位，并逐项校验和写回已确认图片"

@@ -5,20 +5,20 @@
 ## 兼容原则
 
 - 每次调用都以 `get_stage_contract({"stage":"assets"})` 的实时返回为准；不得复制旧 schema 后长期使用。支持旧图复用时，契约会在 `file_capabilities.reuse_registered_files` 明确声明，不能凭本地代码版本猜测。独立 `asset_breakdown` 环节已停用，不再把它当作前置依赖。
-- 工作台内的资产规划由 `assets[].planned_states` 和 `plan_status` 表示。本 Skill 负责同步没有图片的规划草稿；正式图片制作只采用作者已确认的规划。
+- 资产身份 ID 和剧情状态以已确认分镜中的 `shots[].asset_needs` 为准；`assets[].planned_states` 只是图片制作登记，不能成为独立规划来源。
 - MCP 是项目数据通道，不是流程控制器。Skill 负责理解素材和生成图片；MCP 负责提供真实上下文、校验完整候选快照并追加不可变 revision。
 - `assets` 是项目级环节：顶层 `episode_id` 使用实时契约要求的值；当前契约为 `null`。用 `selectors.episode_id` 指定本次制作所属剧集。逐镜精确素材引用由独立 `relations` 阶段写入。
 - 规划占位可以没有文件；一旦提交正式图片，`assets` 只接受真实 `image/*` 文件。图片说明、文件路径字符串、base64 占位、视频、网页或清单都不能代替图片文件。
 
 ## 何时启用
 
-- 用户明确要求拆解、规划并同步工作台资产占位：启用 `assets` 无图片草稿写入，不启动图片生成；只要求分析或建议时保持只读。
-- 用户给出或指向灵创工作台项目，并要求基于已确认资产规划制作图片：启用只读接入；分镜作为视角和构图依据。
+- 用户明确要求同步工作台无图片占位：从已确认分镜需求读取 ID 和状态，启用 `assets` 无图片占位写入；只要求分析或建议时保持只读。
+- 用户给出或指向灵创工作台项目，并要求基于已确认分镜需求制作图片：启用只读接入；分镜同时作为身份、状态、视角和构图依据。
 - 概念图生成与概念确认只使用只读接入，不创建上传会话，不把概念图写入正式资产快照。
 - 每项正式资产生成后，必须明确询问用户是否“确认该正式资产并立即同步到工作台”；用户的肯定答复启用仅针对当前正式资产单元的读写接入。
 - 用户只提供独立剧本、分镜图或参考图：直接使用这些输入，不调用工作台 MCP。
 
-调用本 Skill、选择工作台项目或确认概念图本身都不构成写入授权。用户明确要求同步资产规划或占位时，可写入本次无图片草稿；这不授权生成或写入正式图片。读取分镜、询问风格、生成概念和选择概念都是图片制作的只读阶段。正式资产逐项确认问题必须同时写明“确认”和“立即同步”；用户对此作出的肯定答复只授权当前正式资产单元的一次完整快照写入。
+调用本 Skill、选择工作台项目或确认概念图本身都不构成写入授权。用户明确要求同步无图片占位时，可按分镜需求写入占位；这不授权生成或写入正式图片。读取分镜、询问风格、生成概念和选择概念都是图片制作的只读阶段。正式资产逐项确认问题必须同时写明“确认”和“立即同步”；用户对此作出的肯定答复只授权当前正式资产单元的一次完整快照写入。
 
 ## 固定环节与项目选择
 
@@ -28,12 +28,12 @@
 - 标准输入与输出字段只以本次 `get_stage_contract` 返回值为准，不把当前 schema、模板或示例固化为长期字段清单。
 - `capabilities` 和 `health` 只用于发现能力或诊断连接，不替代 `get_stage_contract`，也不构成写入授权。
 
-## 同步资产规划草稿
+## 同步分镜需求占位
 
-1. 调用 `get_stage_contract(stage="assets")`，确认实时契约支持 `planned_states`、`plan_status` 和无图片占位，再调用 `read_stage_input` 获取当前项目、剧集、剧本、已确认分镜、需求、现有资产和依赖引用。若 MCP 连接仍返回不支持这些字段的旧契约（如 `film-workbench-stage/1.5.0`），先重新连接并复查，不能退回停用的 `asset_breakdown` 阶段或伪造图片资产。
-2. 依据当前证据整理完整项目级资产身份清单，包含已有图片资产与所有尚未制作的身份，不只提交新增项。相同身份的不同状态合在同一资产下；视角与图片版本不增加身份数。沿用已有 ID；保留已有正式图片的状态 key、版本和已确认使用记录。历史拆解只能作为一次性参考，须与当前剧本、分镜和资产库核对，不加入对停用阶段的依赖。
-3. 为各资产填写 `planned_states`；新增或调整的规划设 `plan_status: "draft"`，无图占位设 `content_status: "not_created"`、`variants: []`。现有正式图片由工作台按实时契约保留；同步前从最新输入核对其状态 key。不得填写虚构的 `file_ref`、图片尺寸或验收状态。`known_asset_counts` 按项目级人物、场景、物品身份去重；`usage_bindings` 不新建逐镜绑定。依赖只引用当前剧本与分镜的真实 refs，至少满足实时契约。无图片时 `files: []`，不调用 `begin_stage_upload`。`producer.skill_id` 使用 `digital-asset-export`。
-4. 按 `validate_stage_output → write_stage_output → get_artifact` 写入并回读，再用 `read_stage_input` 核对身份数、状态数和原有正式图片数；检查数字资产页同时显示已制作卡片和空图占位。草稿写入后请作者在页面调整、删除并确认结构。未确认前不得把草稿当成图片制作依据。
+1. 调用 `get_stage_contract(stage="assets")`，确认实时契约支持从分镜读取身份和状态，再调用 `read_stage_input` 获取当前项目、剧集、已确认分镜、需求、现有资产和依赖引用。若连接仍是旧契约，先重新连接并复查，不能退回停用的 `asset_breakdown` 阶段或伪造图片资产。
+2. 直接按分镜 `asset_needs` 汇总项目级稳定资产 ID 和状态；相同 ID 的不同状态合在一项资产下，视角与图片版本不增加身份数。保留已有正式图片、版本和已确认使用记录。历史拆解仅供人工核对，不决定当前需求。
+3. 按分镜的 `asset_id`、`state` 和来源镜头汇总 `planned_states`；无图占位设 `content_status: "not_created"`、`variants: []`。现有正式图片按实时契约保留。不得填写虚构的 `file_ref`、图片尺寸或验收状态，也不得新增分镜未登记的身份或状态。`known_asset_counts` 按项目级身份去重，`usage_bindings: []`。无图片时 `files: []`，不调用 `begin_stage_upload`。`producer.skill_id` 使用 `digital-asset-export`。
+4. 按 `validate_stage_output → write_stage_output → get_artifact` 写入并回读，再用 `read_stage_input` 核对身份数、状态数和原有正式图片数；检查数字资产页的分镜需求与素材状态。身份或状态修订回到分镜阶段确认。
 
 ## 图片制作：读取分镜图与风格门槛
 
@@ -41,7 +41,7 @@
 
 1. 调用 `get_stage_contract({"stage":"assets"})`，完整读取本次 contract、输入输出 schema、字段说明、模板、示例、依赖与文件能力。
 2. 调用 `read_stage_input`，传真实 `project_id`、`episode_id:null`、`stage:"assets"`，以及 `selectors.episode_id` 和可选 `selectors.shot_ids`。
-3. 检查 `data_status`、`warnings`、`context_hash`、`input.existing_assets[].planned_states`、`plan_status`、需求与可复制的 dependency refs。正式图片只能按已确认的资产身份和状态 key 制作；规划尚未确认时，先由作者在数字资产页调整确认。已有资产带有效 `absolute_path` 时也要实际查看图片，再决定继承或增版，不能只读元数据。
+3. 检查 `data_status`、`warnings`、`context_hash`、分镜 `asset_needs`、`input.requirements`、已有资产与可复制的 dependency refs。正式图片只能按分镜确认的资产 ID 和状态 key 制作；若需求缺失或冲突，先回到分镜阶段确认修订。已有资产带有效 `absolute_path` 时也要实际查看图片，再决定继承或增版，不能只读元数据。
 4. 对所选范围内每个需要作为视觉依据的镜头调用 `read_storyboard_frame`，传 `project_id`、真实 `episode_id`、`shot_id` 和需要时的 `storyboard_revision`。工具直接返回 image 内容时查看该图；只返回已经验证的项目库绝对路径时，用本地图片查看工具打开该路径。只读到标题或文字描述不算已经读取分镜图。
 5. 制作场景资产时，用 `input.shots` 找出同一物理场景、同一环境状态的全部相关镜头；若当前 `selectors.shot_ids` 只覆盖其中一部分，扩大只读范围并补看其余相关分镜图。不得依据单个镜头推断整个场景只需或需要哪些方向。
 6. 从图像提取画幅、景别、机位高度与角度、摄影机光轴、实际可见墙面与区域、主体位置、前中后景层次、透视/焦段观感、主光方向、色调、固定陈设、道具位置和留白。把文字镜头说明作为补充，不用文字覆盖图像中可见事实。
@@ -60,10 +60,10 @@
 
 - 概念图只用于锁定正式资产的视觉方向，不作为 asset variant、文件记录或 usage binding 写入；确认概念不会增加 `known_asset_counts`，因为该计数统计资产身份而不是图片阶段或版本。
 - 每次写入前，根据工作台当前资产身份计算 `payload.known_asset_counts`：同一身份的不同状态、视角、图片版本和重复引用都不增加身份数量。未生成图片的已登记身份也计入。`total` 等于 `character + scene + prop`，各类至少覆盖最新输入中的已登记资产。
-- `known_asset_counts` 是项目级数量。多剧集项目跨集去重；不要用镜头数、需求条数或已生成图片数冒充总数。规划新增、删减或合并身份时，按当前工作台结构重新计算。
-- `requirements` 记录分镜需要什么；资产已生成不等于自动关联。实时契约允许 `payload.requirements` 时，可依据已确认分镜登记可证实的需求，但身份和状态必须与已确认规划一致；保留本次未修改的既有需求。
+- `known_asset_counts` 是项目级数量。多剧集项目按分镜已确认的 ID 跨集去重；不要用镜头数、需求条数或已生成图片数冒充总数。
+- `requirements` 由分镜逐镜需求派生；资产已生成不等于自动关联。`assets` 输出不得写 `payload.requirements`，也不得改动需求身份和状态。
 - `usage_bindings` 若仍出现在兼容输入或输出里，只作为旧版使用记录处理。本流程中当前镜头实际固定采用哪张图片，应在 `relations` 阶段逐镜确认并保存，不能因本次上传资产图片就自动绑定。
-- 延用 `read_stage_input` 返回的稳定 asset ID；只有新增资产时才创建不冲突的新 ID。重做图片使用递增版本，不覆盖已确认 revision。
+- 沿用分镜 `asset_needs` 中的稳定 asset ID 和状态 key；新增身份或状态必须先经分镜确认。重做图片使用递增版本，不覆盖已确认 revision。
 - 人物每个造型仍固定为两张真实图片，并归入同一个 character asset、同一个状态和同一个版本组：写实为四视图板加脸部双特写板，非写实为三视图板加单人物特写。`view`、`role` 和 `formal_group` 的具体值按实时契约填写，不为省事拆成两个角色。
 - 场景和物品按主 `SKILL.md` 的独立图片规则写入对应 scene/prop asset；场景只写入分镜方向检查后实际生成的 variants，未生成的反向或侧向视图不得创建空记录。多张视角图属于同一资产的 variants，不为每个视角新建资产 ID。
 - 不把所有生成图片批量关联到所有镜头。权威关系以 `relations` 成果中的精确 asset、state、view、version 和 file ID 为准。
@@ -85,7 +85,7 @@
 只有用户对当前正式资产的逐项确认问题作出肯定答复时才执行；概念确认不得触发本流程，一次正式确认不得合并多个资产单元：
 
 1. 图片生成并获得用户确认后，重新调用 `get_stage_contract` 和 `read_stage_input`。若契约版本、`context_hash`、依赖 revision 或现有资产发生变化，用新上下文重建候选，不能提交旧上下文生成的增量。
-2. 组装完整候选快照，而不是只提交本次新增图片。依据当前已确认规划填写稳定资产 ID、`planned_states`、`plan_status` 和 `known_asset_counts`；若实时契约允许，同时保留已有需求。除非用户明确要求替换，必须保留最新输入中的既有资产、状态和版本，只加入当前已确认正式资产单元的新图片版本；不得包含概念图或擅自新增镜头绑定。`producer.skill_id` 使用 `digital-asset-export`，`skill_version` 只填写真实版本或契约允许的空值。
+2. 组装完整候选快照，而不是只提交本次新增图片。依据当前分镜需求填写稳定资产 ID、`planned_states` 和 `known_asset_counts`，`usage_bindings` 固定为空数组；不得提交 `requirements`。除非用户明确要求替换，必须保留最新输入中的既有资产、状态和版本，只加入当前已确认正式资产单元的新图片版本；不得包含概念图或擅自新增镜头绑定。`producer.skill_id` 使用 `digital-asset-export`，`skill_version` 只填写真实版本或契约允许的空值。
 3. 只有实时契约声明 `upload_supported` 时调用 `begin_stage_upload`。只在返回的一次性目录中写 `artifact.json` 与 `files/`；不得写任意项目路径。这里的 JSON 是 MCP 内部传输元数据，不作为用户交付物，最终仍只向用户交付图片。
 4. 依据实时契约记录真实图片 MIME、字节数、SHA-256、宽高、与已确认规划一致的资产身份和状态 key、视角及版本，并只引用本次实际采用的 dependency refs。`files[].ref` 与 variant 的 `file_ref` 必须指向同一真实图片。若契约声明 `reuse_registered_files`，可用最新 `get_artifact` 的已登记文件元数据在完整 `files[]` 中保留旧图并填写 `reuse_file_id`，只复制本次新增图片；必须核对其 role、MIME、字节数、SHA-256、宽高及可访问、已校验状态。若未声明，不向旧版 MCP 发送 `reuse_file_id`。规划占位不得伪造 `file_ref` 或图片尺寸。
 5. 调用 `validate_stage_output`，优先传 `upload_session_id`；失败时修正候选，不写正式项目。成功后才把同一长生命周期 MCP 进程签发的一次性 `validation_token` 交给 `write_stage_output`。
